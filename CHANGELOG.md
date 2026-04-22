@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 - Diagnostics/OTEL: support `OPENCLAW_OTEL_PRELOADED=1` so the plugin can reuse an already-registered OpenTelemetry SDK while keeping OpenClaw diagnostic listeners wired. (#70424) Thanks @jlapenna.
 - Control UI: refine the agent Tool Access panel with compact live-tool chips, collapsible tool groups, direct per-tool toggles, and clearer runtime/source provenance. (#71405) Thanks @BunsDev.
 - Memory-core/hybrid search: expose raw `vectorScore` and `textScore` alongside the combined `score` on hybrid memory search results, so callers can inspect vector-versus-text retrieval contribution before temporal decay or MMR reordering. Fixes #68166. (#68286) Thanks @ajfonthemove.
+- Security/SSRF: add network-level SSRF protection via a Caddy forward proxy sidecar that blocks outbound connections to private/internal IP ranges at time-of-use, eliminating the DNS rebinding TOCTOU window in application-level DNS pinning. Dual-stack enforcement covers both `fetch()`/undici and `node:http`/`node:https` stacks, with graceful degradation when Caddy is unavailable. (#70044) Thanks @jesse-merhi.
 
 ### Fixes
 
