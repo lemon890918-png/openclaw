@@ -52,6 +52,24 @@ OPENCLAW_SSRF_PROXY_URL=http://127.0.0.1:3128 openclaw gateway run
 
 If `enabled=true` but no proxy URL is configured, OpenClaw logs a warning and continues with application-level SSRF guards only.
 
+For managed gateway services started with `openclaw gateway start`, prefer storing the URL in config:
+
+```bash
+openclaw config set ssrfProxy.enabled true
+openclaw config set ssrfProxy.proxyUrl http://127.0.0.1:3128
+openclaw gateway install --force
+openclaw gateway start
+```
+
+The environment fallback is best for foreground runs. If you use it with an installed service,
+put `OPENCLAW_SSRF_PROXY_URL` in the service's durable environment, such as
+`$OPENCLAW_STATE_DIR/.env` or `~/.openclaw/.env`, then reinstall the service so launchd,
+systemd, or Scheduled Tasks starts the gateway with that value.
+
+For `openclaw --container ...` commands, OpenClaw forwards `OPENCLAW_SSRF_PROXY_URL` into
+the container-targeted child CLI when it is set. Make sure the URL is reachable from inside
+the container; `127.0.0.1` refers to the container itself, not the host.
+
 ## Proxy Hardening Checklist
 
 The proxy policy is the security boundary. OpenClaw cannot verify that the proxy blocks the right targets.
@@ -230,7 +248,8 @@ Then enable proxy routing and start OpenClaw with the proxy URL:
 
 ```bash
 openclaw config set ssrfProxy.enabled true
-OPENCLAW_SSRF_PROXY_URL=http://127.0.0.1:3128 openclaw gateway run
+openclaw config set ssrfProxy.proxyUrl http://127.0.0.1:3128
+openclaw gateway run
 ```
 
 or set:

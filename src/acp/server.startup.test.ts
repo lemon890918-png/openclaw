@@ -21,6 +21,8 @@ const mockState = vi.hoisted(() => ({
   gatewayAuth: [] as GatewayClientAuth[],
   agentSideConnectionCtor: vi.fn(),
   agentStart: vi.fn(),
+  startSsrFProxy: vi.fn(async (_config: unknown) => null as unknown),
+  stopSsrFProxy: vi.fn(async (_handle: unknown) => {}),
   resolveGatewayClientBootstrap: vi.fn<ResolveGatewayClientBootstrap>(async (_params) => ({
     url: "ws://127.0.0.1:18789",
     urlSource: "local loopback",
@@ -104,6 +106,11 @@ vi.mock("../infra/is-main.js", () => ({
   isMainModule: () => false,
 }));
 
+vi.mock("../infra/net/ssrf-proxy/proxy-lifecycle.js", () => ({
+  startSsrFProxy: (config: unknown) => mockState.startSsrFProxy(config),
+  stopSsrFProxy: (handle: unknown) => mockState.stopSsrFProxy(handle),
+}));
+
 vi.mock("./translator.js", () => ({
   AcpGatewayAgent: class {
     start(): void {
@@ -120,6 +127,7 @@ vi.mock("./translator.js", () => ({
 
 describe("serveAcpGateway startup", () => {
   let serveAcpGateway: typeof import("./server.js").serveAcpGateway;
+  let runStandaloneAcpServer: typeof import("./server.js").runStandaloneAcpServer;
 
   function getMockGateway() {
     const gateway = mockState.gateways[0];
@@ -158,7 +166,7 @@ describe("serveAcpGateway startup", () => {
   }
 
   beforeAll(async () => {
-    ({ serveAcpGateway } = await import("./server.js"));
+    ({ serveAcpGateway, runStandaloneAcpServer } = await import("./server.js"));
   });
 
   beforeEach(async () => {
@@ -166,6 +174,10 @@ describe("serveAcpGateway startup", () => {
     mockState.gatewayAuth.length = 0;
     mockState.agentSideConnectionCtor.mockReset();
     mockState.agentStart.mockReset();
+    mockState.startSsrFProxy.mockReset();
+    mockState.stopSsrFProxy.mockReset();
+    mockState.startSsrFProxy.mockResolvedValue(null);
+    mockState.stopSsrFProxy.mockResolvedValue(undefined);
     mockState.resolveGatewayClientBootstrap.mockReset();
     mockState.resolveGatewayClientBootstrap.mockResolvedValue({
       url: "ws://127.0.0.1:18789",
@@ -262,6 +274,26 @@ describe("serveAcpGateway startup", () => {
 
       await emitHelloAndWaitForAgentSideConnection();
       await stopServeWithSigint(signalHandlers, servePromise);
+    } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
+  it("activates SSRF proxy routing for the standalone ACP server entrypoint", async () => {
+    const handle = { proxyUrl: "http://127.0.0.1:3128" };
+    mockState.startSsrFProxy.mockResolvedValueOnce(handle);
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+
+    try {
+      const servePromise = runStandaloneAcpServer({});
+      await vi.waitFor(() => {
+        expect(mockState.gateways).toHaveLength(1);
+      });
+
+      expect(mockState.startSsrFProxy).toHaveBeenCalledWith(undefined);
+      await emitHelloAndWaitForAgentSideConnection();
+      await stopServeWithSigint(signalHandlers, servePromise);
+      expect(mockState.stopSsrFProxy).toHaveBeenCalledWith(handle);
     } finally {
       onceSpy.mockRestore();
     }
