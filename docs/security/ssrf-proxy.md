@@ -131,6 +131,7 @@ Caddy requires the `github.com/caddyserver/forwardproxy` plugin for forward prox
 - Use deny ACLs for the blocked destinations above.
 - End with an allow-all rule for public internet destinations.
 - Do not configure upstream proxy mode unless you have verified it preserves ACL enforcement.
+- Do not copy `::ffff:0:0/96` into this Caddy ACL. The plugin uses Go IP matching, where that CIDR also matches ordinary IPv4 destinations; explicit IPv4 deny ranges provide the intended coverage without blocking the public IPv4 internet.
 
 Example JSON shape:
 
@@ -184,8 +185,7 @@ Example JSON shape:
                         "64:ff9b:1::/48",
                         "2002::/16",
                         "2001::/32",
-                        "::/96",
-                        "::ffff:0:0/96"
+                        "::/96"
                       ],
                       "allow": false
                     },
