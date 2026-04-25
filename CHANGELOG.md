@@ -10,7 +10,6 @@ Docs: https://docs.openclaw.ai
 - Diagnostics/OTEL: support `OPENCLAW_OTEL_PRELOADED=1` so the plugin can reuse an already-registered OpenTelemetry SDK while keeping OpenClaw diagnostic listeners wired. (#70424) Thanks @jlapenna.
 - Control UI: refine the agent Tool Access panel with compact live-tool chips, collapsible tool groups, direct per-tool toggles, and clearer runtime/source provenance. (#71405) Thanks @BunsDev.
 - Memory-core/hybrid search: expose raw `vectorScore` and `textScore` alongside the combined `score` on hybrid memory search results, so callers can inspect vector-versus-text retrieval contribution before temporal decay or MMR reordering. Fixes #68166. (#68286) Thanks @ajfonthemove.
-- Security/SSRF: add opt-in network-level SSRF protection via an operator-managed HTTP forward proxy configured with `ssrfProxy.proxyUrl`, so deployments can route OpenClaw's process-local HTTP clients through their own Caddy, Squid, Envoy, or equivalent filtering proxy while keeping application-level guards active. (#70044) Thanks @jesse-merhi.
 
 ### Fixes
 
@@ -103,6 +102,7 @@ Docs: https://docs.openclaw.ai
 - CLI/Gateway: make `gateway status` start faster by skipping plugin loading on the read-only status path. (#71364) Thanks @andyylin.
 - Plugins/compatibility: add a central plugin compatibility registry and docs for SDK/config/setup/runtime deprecation records, including dated migration metadata for legacy harness naming and other plugin-facing aliases. Thanks @vincentkoc.
 - Agents/bootstrap: add `agents.defaults.contextInjection: "never"` to disable workspace bootstrap file injection for agents that fully own their prompt lifecycle. (#65006) Thanks @xDarkicex.
+- Security/SSRF: add opt-in network-level SSRF protection via an operator-managed HTTP forward proxy configured with `ssrfProxy.proxyUrl`, so deployments can route OpenClaw's process-local HTTP clients through their own Caddy, Squid, Envoy, or equivalent filtering proxy while keeping application-level guards active. (#70044) Thanks @jesse-merhi.
 
 ### Fixes
 
