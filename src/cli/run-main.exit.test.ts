@@ -161,12 +161,21 @@ describe("runCli exit behavior", () => {
     exitSpy.mockRestore();
   });
 
-  it("stops the SSRF proxy after normal routed command completion", async () => {
+  it("does not start the SSRF proxy for local gateway client commands", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(true);
+
+    await runCli(["node", "openclaw", "status"]);
+
+    expect(startSsrFProxyMock).not.toHaveBeenCalled();
+    expect(stopSsrFProxyMock).not.toHaveBeenCalled();
+  });
+
+  it("stops the SSRF proxy after normal gateway runtime completion", async () => {
     const handle = makeSsrFProxyHandle();
     startSsrFProxyMock.mockResolvedValueOnce(handle);
     tryRouteCliMock.mockResolvedValueOnce(true);
 
-    await runCli(["node", "openclaw", "status"]);
+    await runCli(["node", "openclaw", "gateway", "run"]);
 
     expect(startSsrFProxyMock).toHaveBeenCalledWith(undefined);
     expect(stopSsrFProxyMock).toHaveBeenCalledOnce();
@@ -191,7 +200,7 @@ describe("runCli exit behavior", () => {
     }) as typeof process.exit);
 
     try {
-      const runPromise = runCli(["node", "openclaw", "status"]);
+      const runPromise = runCli(["node", "openclaw", "gateway", "run"]);
       await vi.waitFor(() => {
         expect(processOnceSpy).toHaveBeenCalledWith("SIGINT", expect.any(Function));
       });
@@ -231,7 +240,7 @@ describe("runCli exit behavior", () => {
 
     const processOnceSpy = vi.spyOn(process, "once");
     try {
-      const runPromise = runCli(["node", "openclaw", "status"]);
+      const runPromise = runCli(["node", "openclaw", "gateway", "run"]);
       await vi.waitFor(() => {
         expect(processOnceSpy.mock.calls.filter(([event]) => event === "exit")).toHaveLength(2);
       });

@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import http from "node:http";
+import https from "node:https";
 import { WebSocket, type ClientOptions, type CertMeta } from "ws";
 import {
   clearDeviceAuthToken,
@@ -81,6 +83,10 @@ type StoredDeviceAuth = {
 type FingerprintCheckingClientOptions = Omit<ClientOptions, "checkServerIdentity"> & {
   checkServerIdentity?: (servername: string, cert: CertMeta) => Error | undefined;
 };
+
+function createDirectGatewayAgent(url: string): http.Agent | https.Agent {
+  return url.startsWith("wss://") ? new https.Agent() : new http.Agent();
+}
 
 export class GatewayClientRequestError extends Error {
   readonly gatewayCode: string;
@@ -255,6 +261,7 @@ export class GatewayClient {
     // Allow node screen snapshots and other large responses.
     const wsOptions: FingerprintCheckingClientOptions = {
       maxPayload: 25 * 1024 * 1024,
+      agent: createDirectGatewayAgent(url),
     };
     if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
       wsOptions.rejectUnauthorized = false;

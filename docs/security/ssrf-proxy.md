@@ -1,6 +1,14 @@
+---
+summary: "How to route OpenClaw runtime HTTP traffic through an operator-managed SSRF-filtering proxy"
+title: "SSRF network proxy"
+read_when:
+  - You want defense-in-depth against SSRF and DNS rebinding attacks
+  - Configuring an external forward proxy for OpenClaw runtime traffic
+---
+
 # SSRF Network Proxy
 
-OpenClaw can route process-wide HTTP traffic through an operator-managed forward proxy for network-level SSRF protection. This is an optional defense-in-depth layer on top of the application-level `fetchWithSsrFGuard` DNS-pinning mechanism.
+OpenClaw can route runtime HTTP traffic through an operator-managed forward proxy for network-level SSRF protection. This is an optional defense-in-depth layer on top of the application-level `fetchWithSsrFGuard` DNS-pinning mechanism.
 
 OpenClaw does not ship, download, start, or configure a proxy. You provide a filtering proxy such as Caddy, Squid, Envoy, or an equivalent egress-control service, and OpenClaw routes HTTP clients through it.
 
@@ -8,11 +16,11 @@ OpenClaw does not ship, download, start, or configure a proxy. You provide a fil
 
 Application-level DNS pinning resolves DNS before a request and pins the checked IP. A fast DNS rebinding attack can still try to swap the destination between that check and the actual connection.
 
-A filtering forward proxy can close that time-of-check/time-of-use window by applying destination IP rules when it resolves and dials the upstream target. This also covers raw HTTP clients inside the OpenClaw process that do not call `fetchWithSsrFGuard` directly.
+A filtering forward proxy can close that time-of-check/time-of-use window by applying destination IP rules when it resolves and dials the upstream target. This also covers normal JavaScript HTTP clients inside protected OpenClaw runtime processes that do not call `fetchWithSsrFGuard` directly.
 
 ## How OpenClaw Routes Traffic
 
-When `ssrfProxy.enabled=true` and a proxy URL is configured, OpenClaw injects proxy settings for the current process:
+When `ssrfProxy.enabled=true` and a proxy URL is configured, OpenClaw injects proxy settings for protected runtime processes such as `openclaw gateway run`, `openclaw node run`, and `openclaw agent --local`:
 
 ```text
 OpenClaw process
@@ -26,6 +34,8 @@ OpenClaw activates two routing layers:
 | ----- | ---------------------------------------------- | ---------------------------------------------------------------------- |
 | A     | undici global dispatcher via proxy environment | `fetch()` and direct `undici.request()` calls                          |
 | B     | `global-agent` bootstrap                       | `node:http`, `node:https`, axios, got, node-fetch, and similar clients |
+
+OpenClaw's own Gateway control-plane WebSocket client uses a direct transport so local Gateway RPC traffic is not sent through a proxy policy that should block loopback destinations. This bypass is limited to OpenClaw's internal Gateway connection; normal runtime HTTP requests still use the configured proxy.
 
 The proxy URL itself must use `http://`. HTTPS destinations are still supported through the proxy with HTTP `CONNECT`; this only means OpenClaw expects a plain HTTP forward-proxy listener such as `http://127.0.0.1:3128`.
 

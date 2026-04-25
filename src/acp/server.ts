@@ -7,7 +7,6 @@ import { resolveGatewayClientBootstrap } from "../gateway/client-bootstrap.js";
 import { GatewayClient } from "../gateway/client.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { isMainModule } from "../infra/is-main.js";
-import { startSsrFProxy, stopSsrFProxy } from "../infra/net/ssrf-proxy/proxy-lifecycle.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { readSecretFromFile } from "./secret-file.js";
 import { AcpGatewayAgent } from "./translator.js";
@@ -236,13 +235,7 @@ Options:
 }
 
 export async function runStandaloneAcpServer(opts: AcpServerOptions = {}): Promise<void> {
-  const cfg = loadConfig();
-  const ssrfProxyHandle = await startSsrFProxy(cfg?.ssrfProxy ?? undefined);
-  try {
-    await serveAcpGateway(opts);
-  } finally {
-    await stopSsrFProxy(ssrfProxyHandle);
-  }
+  await serveAcpGateway(opts);
 }
 
 if (isMainModule({ currentFile: fileURLToPath(import.meta.url) })) {

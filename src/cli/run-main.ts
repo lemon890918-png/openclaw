@@ -28,6 +28,7 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
+import { hasFlag } from "./argv.js";
 import {
   shouldRegisterPrimaryCommandOnly,
   shouldSkipPluginCommandRegistration,
@@ -71,6 +72,24 @@ export function shouldEnsureCliPath(argv: string[]): boolean {
 
 export function shouldUseRootHelpFastPath(argv: string[]): boolean {
   return resolveCliArgvInvocation(argv).isRootHelpInvocation;
+}
+
+export function shouldStartSsrFProxyForCli(argv: string[]): boolean {
+  const invocation = resolveCliArgvInvocation(argv);
+  const [primary, secondary] = invocation.commandPath;
+  if (invocation.hasHelpOrVersion || !primary) {
+    return false;
+  }
+  if (primary === "gateway") {
+    return secondary === undefined || secondary === "run";
+  }
+  if (primary === "node") {
+    return secondary === "run";
+  }
+  if (primary === "agent") {
+    return hasFlag(argv, "--local");
+  }
+  return false;
 }
 
 export function resolveMissingPluginCommandMessage(
@@ -195,10 +214,11 @@ export async function runCli(argv: string[] = process.argv) {
   // Enforce the minimum supported runtime before doing any work.
   assertSupportedRuntime();
 
-  // Activate external network-level SSRF proxy routing if configured. This is best-effort:
-  //   - If config can't be loaded yet (e.g. fast-path commands), it's skipped.
-  //   - If ssrfProxy is disabled or no proxy URL is configured, it logs a warning and
-  //     openclaw continues with application-level guards only.
+  // Activate external network-level SSRF proxy routing only for runtime commands.
+  // Short-lived Gateway client commands keep direct control-plane access to the
+  // local Gateway while the Gateway/node/embedded-agent runtime owns egress policy.
+  // If config can't be loaded or no proxy URL is configured, application-level
+  // guards remain active.
   // The handle is captured so we can restore process proxy state on exit.
   let ssrfProxyHandle: SsrFProxyHandle | null = null;
   const stopStartedSsrFProxy = async () => {
@@ -214,9 +234,11 @@ export async function runCli(argv: string[] = process.argv) {
     handle?.kill("SIGTERM");
   };
   try {
-    const { loadConfig } = await import("../config/io.js");
-    const config = loadConfig();
-    ssrfProxyHandle = await startSsrFProxy(config?.ssrfProxy ?? undefined);
+    if (shouldStartSsrFProxyForCli(normalizedArgv)) {
+      const { loadConfig } = await import("../config/io.js");
+      const config = loadConfig();
+      ssrfProxyHandle = await startSsrFProxy(config?.ssrfProxy ?? undefined);
+    }
   } catch {
     // Config load may fail for many CLI commands that don't need it (e.g.
     // help, version). Don't block startup — application-level guards remain.

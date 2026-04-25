@@ -279,9 +279,7 @@ describe("serveAcpGateway startup", () => {
     }
   });
 
-  it("activates SSRF proxy routing for the standalone ACP server entrypoint", async () => {
-    const handle = { proxyUrl: "http://127.0.0.1:3128" };
-    mockState.startSsrFProxy.mockResolvedValueOnce(handle);
+  it("does not proxy the standalone ACP control-plane Gateway connection", async () => {
     const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
 
     try {
@@ -290,10 +288,10 @@ describe("serveAcpGateway startup", () => {
         expect(mockState.gateways).toHaveLength(1);
       });
 
-      expect(mockState.startSsrFProxy).toHaveBeenCalledWith(undefined);
+      expect(mockState.startSsrFProxy).not.toHaveBeenCalled();
       await emitHelloAndWaitForAgentSideConnection();
       await stopServeWithSigint(signalHandlers, servePromise);
-      expect(mockState.stopSsrFProxy).toHaveBeenCalledWith(handle);
+      expect(mockState.stopSsrFProxy).not.toHaveBeenCalled();
     } finally {
       onceSpy.mockRestore();
     }

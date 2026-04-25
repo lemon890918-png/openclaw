@@ -1,3 +1,5 @@
+import http from "node:http";
+import https from "node:https";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../undici-global-dispatcher.js", () => ({
@@ -15,7 +17,7 @@ vi.mock("../../../logger.js", () => ({
 }));
 
 import { bootstrap as bootstrapGlobalAgent } from "global-agent";
-import { logWarn } from "../../../logger.js";
+import { logInfo, logWarn } from "../../../logger.js";
 import { forceResetGlobalDispatcher } from "../undici-global-dispatcher.js";
 import {
   _resetGlobalAgentBootstrapForTests,
@@ -25,6 +27,7 @@ import {
 
 const mockForceResetGlobalDispatcher = vi.mocked(forceResetGlobalDispatcher);
 const mockBootstrapGlobalAgent = vi.mocked(bootstrapGlobalAgent);
+const mockLogInfo = vi.mocked(logInfo);
 const mockLogWarn = vi.mocked(logWarn);
 
 describe("startSsrFProxy", () => {
@@ -40,8 +43,15 @@ describe("startSsrFProxy", () => {
     "GLOBAL_AGENT_HTTPS_PROXY",
     "GLOBAL_AGENT_FORCE_GLOBAL_AGENT",
     "GLOBAL_AGENT_NO_PROXY",
+    "OPENCLAW_SSRF_PROXY_ACTIVE",
     "OPENCLAW_SSRF_PROXY_URL",
   ];
+  const originalHttpRequest = http.request;
+  const originalHttpGet = http.get;
+  const originalHttpGlobalAgent = http.globalAgent;
+  const originalHttpsRequest = https.request;
+  const originalHttpsGet = https.get;
+  const originalHttpsGlobalAgent = https.globalAgent;
 
   beforeEach(() => {
     for (const key of envKeysToClean) {
@@ -50,9 +60,16 @@ describe("startSsrFProxy", () => {
     }
     mockForceResetGlobalDispatcher.mockReset();
     mockBootstrapGlobalAgent.mockReset();
+    mockLogInfo.mockReset();
     mockLogWarn.mockReset();
     _resetGlobalAgentBootstrapForTests();
     (global as Record<string, unknown>)["GLOBAL_AGENT"] = undefined;
+    http.request = originalHttpRequest;
+    http.get = originalHttpGet;
+    http.globalAgent = originalHttpGlobalAgent;
+    https.request = originalHttpsRequest;
+    https.get = originalHttpsGet;
+    https.globalAgent = originalHttpsGlobalAgent;
   });
 
   afterEach(() => {
@@ -64,9 +81,15 @@ describe("startSsrFProxy", () => {
       }
     }
     (global as Record<string, unknown>)["GLOBAL_AGENT"] = undefined;
+    http.request = originalHttpRequest;
+    http.get = originalHttpGet;
+    http.globalAgent = originalHttpGlobalAgent;
+    https.request = originalHttpsRequest;
+    https.get = originalHttpsGet;
+    https.globalAgent = originalHttpsGlobalAgent;
   });
 
-  it("returns null and does not touch env when not explicitly enabled", async () => {
+  it("returns null silently and does not touch env when not explicitly enabled", async () => {
     const handle = await startSsrFProxy(undefined);
 
     expect(handle).toBeNull();
@@ -74,6 +97,8 @@ describe("startSsrFProxy", () => {
     expect(process.env["GLOBAL_AGENT_HTTP_PROXY"]).toBeUndefined();
     expect(mockForceResetGlobalDispatcher).not.toHaveBeenCalled();
     expect(mockBootstrapGlobalAgent).not.toHaveBeenCalled();
+    expect(mockLogInfo).not.toHaveBeenCalled();
+    expect(mockLogWarn).not.toHaveBeenCalled();
   });
 
   it("returns null and logs when enabled without a proxy URL", async () => {
@@ -130,7 +155,20 @@ describe("startSsrFProxy", () => {
     expect(process.env["HTTPS_PROXY"]).toBe("http://127.0.0.1:3128");
     expect(process.env["GLOBAL_AGENT_HTTP_PROXY"]).toBe("http://127.0.0.1:3128");
     expect(process.env["GLOBAL_AGENT_HTTPS_PROXY"]).toBe("http://127.0.0.1:3128");
-    expect(process.env["GLOBAL_AGENT_FORCE_GLOBAL_AGENT"]).toBe("true");
+    expect(process.env["GLOBAL_AGENT_FORCE_GLOBAL_AGENT"]).toBe("false");
+    expect(process.env["OPENCLAW_SSRF_PROXY_ACTIVE"]).toBe("1");
+  });
+
+  it("redacts proxy credentials before logging the active proxy URL", async () => {
+    await startSsrFProxy({
+      enabled: true,
+      proxyUrl: "http://user:pass@127.0.0.1:3128",
+    });
+
+    expect(mockLogInfo).toHaveBeenCalledWith(
+      "ssrf-proxy: routing process HTTP traffic through external proxy http://127.0.0.1:3128",
+    );
+    expect(mockLogInfo).not.toHaveBeenCalledWith(expect.stringContaining("user:pass"));
   });
 
   it("clears NO_PROXY so internal destinations do not bypass the filtering proxy", async () => {
@@ -186,12 +224,51 @@ describe("startSsrFProxy", () => {
     expect(process.env["GLOBAL_AGENT_HTTP_PROXY"]).toBe("http://previous-global.example.com:8080");
     expect(process.env["GLOBAL_AGENT_HTTPS_PROXY"]).toBe("http://previous-global.example.com:8443");
     expect(process.env["GLOBAL_AGENT_NO_PROXY"]).toBe("global.corp.example.com");
+    expect(process.env["OPENCLAW_SSRF_PROXY_ACTIVE"]).toBeUndefined();
     const agent = (global as Record<string, unknown>)["GLOBAL_AGENT"] as Record<string, unknown>;
     expect(agent["HTTP_PROXY"]).toBe("http://previous-global.example.com:8080");
     expect(agent["HTTPS_PROXY"]).toBe("http://previous-global.example.com:8443");
     expect(agent["NO_PROXY"]).toBe("global.corp.example.com");
     expect(agent["forceGlobalAgent"]).toBeUndefined();
     expect(mockForceResetGlobalDispatcher).toHaveBeenCalledOnce();
+  });
+
+  it("restores node http and https globals on stop", async () => {
+    const patchedHttpRequest = vi.fn() as unknown as typeof http.request;
+    const patchedHttpGet = vi.fn() as unknown as typeof http.get;
+    const patchedHttpsRequest = vi.fn() as unknown as typeof https.request;
+    const patchedHttpsGet = vi.fn() as unknown as typeof https.get;
+    const patchedHttpAgent = new http.Agent();
+    const patchedHttpsAgent = new https.Agent();
+    mockBootstrapGlobalAgent.mockImplementationOnce(() => {
+      http.request = patchedHttpRequest;
+      http.get = patchedHttpGet;
+      http.globalAgent = patchedHttpAgent;
+      https.request = patchedHttpsRequest;
+      https.get = patchedHttpsGet;
+      https.globalAgent = patchedHttpsAgent;
+      (global as Record<string, unknown>)["GLOBAL_AGENT"] = {
+        HTTP_PROXY: "",
+        HTTPS_PROXY: "",
+      };
+    });
+
+    const handle = await startSsrFProxy({
+      enabled: true,
+      proxyUrl: "http://127.0.0.1:3128",
+    });
+
+    expect(http.request).toBe(patchedHttpRequest);
+
+    await stopSsrFProxy(handle);
+
+    expect(http.request).toBe(originalHttpRequest);
+    expect(http.get).toBe(originalHttpGet);
+    expect(http.globalAgent).toBe(originalHttpGlobalAgent);
+    expect(https.request).toBe(originalHttpsRequest);
+    expect(https.get).toBe(originalHttpsGet);
+    expect(https.globalAgent).toBe(originalHttpsGlobalAgent);
+    expect((global as Record<string, unknown>)["GLOBAL_AGENT"]).toBeUndefined();
   });
 
   it("restores env when undici activation fails", async () => {

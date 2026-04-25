@@ -7,6 +7,8 @@
  * restores the previous process state on shutdown.
  */
 
+import http from "node:http";
+import https from "node:https";
 import { bootstrap as bootstrapGlobalAgent } from "global-agent";
 import { logInfo, logWarn } from "../../../logger.js";
 import { forceResetGlobalDispatcher } from "../undici-global-dispatcher.js";
@@ -29,19 +31,33 @@ const PROXY_ENV_KEYS = ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"
 const GLOBAL_AGENT_PROXY_KEYS = ["GLOBAL_AGENT_HTTP_PROXY", "GLOBAL_AGENT_HTTPS_PROXY"] as const;
 const GLOBAL_AGENT_FORCE_KEYS = ["GLOBAL_AGENT_FORCE_GLOBAL_AGENT"] as const;
 const NO_PROXY_ENV_KEYS = ["no_proxy", "NO_PROXY", "GLOBAL_AGENT_NO_PROXY"] as const;
+const SSRF_PROXY_ACTIVE_KEYS = ["OPENCLAW_SSRF_PROXY_ACTIVE"] as const;
 const ALL_PROXY_ENV_KEYS = [
   ...PROXY_ENV_KEYS,
   ...GLOBAL_AGENT_PROXY_KEYS,
   ...GLOBAL_AGENT_FORCE_KEYS,
   ...NO_PROXY_ENV_KEYS,
+  ...SSRF_PROXY_ACTIVE_KEYS,
 ] as const;
 type ProxyEnvKey = (typeof ALL_PROXY_ENV_KEYS)[number];
 type ProxyEnvSnapshot = Record<ProxyEnvKey, string | undefined>;
+type NodeHttpStackSnapshot = {
+  httpRequest: typeof http.request;
+  httpGet: typeof http.get;
+  httpGlobalAgent: typeof http.globalAgent;
+  httpsRequest: typeof https.request;
+  httpsGet: typeof https.get;
+  httpsGlobalAgent: typeof https.globalAgent;
+  hadGlobalAgent: boolean;
+  globalAgent: unknown;
+};
 
 let globalAgentBootstrapped = false;
+let nodeHttpStackSnapshot: NodeHttpStackSnapshot | null = null;
 
 export function _resetGlobalAgentBootstrapForTests(): void {
   globalAgentBootstrapped = false;
+  nodeHttpStackSnapshot = null;
 }
 
 function captureProxyEnv(): ProxyEnvSnapshot {
@@ -56,6 +72,7 @@ function captureProxyEnv(): ProxyEnvSnapshot {
     no_proxy: process.env["no_proxy"],
     NO_PROXY: process.env["NO_PROXY"],
     GLOBAL_AGENT_NO_PROXY: process.env["GLOBAL_AGENT_NO_PROXY"],
+    OPENCLAW_SSRF_PROXY_ACTIVE: process.env["OPENCLAW_SSRF_PROXY_ACTIVE"],
   };
 }
 
@@ -67,7 +84,8 @@ function injectProxyEnv(proxyUrl: string): ProxyEnvSnapshot {
   for (const key of GLOBAL_AGENT_PROXY_KEYS) {
     process.env[key] = proxyUrl;
   }
-  process.env["GLOBAL_AGENT_FORCE_GLOBAL_AGENT"] = "true";
+  process.env["GLOBAL_AGENT_FORCE_GLOBAL_AGENT"] = "false";
+  process.env["OPENCLAW_SSRF_PROXY_ACTIVE"] = "1";
   for (const key of NO_PROXY_ENV_KEYS) {
     process.env[key] = "";
   }
@@ -98,8 +116,44 @@ function restoreGlobalAgentRuntime(snapshot: ProxyEnvSnapshot): void {
   agent["NO_PROXY"] = snapshot["GLOBAL_AGENT_NO_PROXY"] ?? null;
 }
 
+function captureNodeHttpStack(): NodeHttpStackSnapshot {
+  const globalRecord = global as Record<string, unknown>;
+  return {
+    httpRequest: http.request,
+    httpGet: http.get,
+    httpGlobalAgent: http.globalAgent,
+    httpsRequest: https.request,
+    httpsGet: https.get,
+    httpsGlobalAgent: https.globalAgent,
+    hadGlobalAgent: Object.hasOwn(globalRecord, "GLOBAL_AGENT"),
+    globalAgent: globalRecord["GLOBAL_AGENT"],
+  };
+}
+
+function restoreNodeHttpStack(): void {
+  const snapshot = nodeHttpStackSnapshot;
+  if (!snapshot) {
+    return;
+  }
+  http.request = snapshot.httpRequest;
+  http.get = snapshot.httpGet;
+  http.globalAgent = snapshot.httpGlobalAgent;
+  https.request = snapshot.httpsRequest;
+  https.get = snapshot.httpsGet;
+  https.globalAgent = snapshot.httpsGlobalAgent;
+  const globalRecord = global as Record<string, unknown>;
+  if (snapshot.hadGlobalAgent) {
+    globalRecord["GLOBAL_AGENT"] = snapshot.globalAgent;
+  } else {
+    delete globalRecord["GLOBAL_AGENT"];
+  }
+  nodeHttpStackSnapshot = null;
+  globalAgentBootstrapped = false;
+}
+
 function bootstrapNodeHttpStack(proxyUrl: string): void {
   if (!globalAgentBootstrapped) {
+    nodeHttpStackSnapshot = captureNodeHttpStack();
     bootstrapGlobalAgent();
     globalAgentBootstrapped = true;
   }
@@ -132,11 +186,19 @@ function resolveProxyUrl(config: SsrFProxyConfig | undefined): string | null {
   return isSupportedProxyUrl(candidate) ? candidate : null;
 }
 
+function redactProxyUrlForLog(value: string): string {
+  try {
+    const url = new URL(value);
+    return url.origin;
+  } catch {
+    return "<invalid proxy URL>";
+  }
+}
+
 export async function startSsrFProxy(
   config: SsrFProxyConfig | undefined,
 ): Promise<SsrFProxyHandle | null> {
   if (config?.enabled !== true) {
-    logInfo("ssrf-proxy: disabled - using application-level SSRF guards only");
     return null;
   }
 
@@ -167,6 +229,11 @@ export async function startSsrFProxy(
     } catch (err) {
       logWarn(`ssrf-proxy: failed to reset global-agent: ${String(err)}`);
     }
+    try {
+      restoreNodeHttpStack();
+    } catch (err) {
+      logWarn(`ssrf-proxy: failed to restore node HTTP stack: ${String(err)}`);
+    }
   };
 
   try {
@@ -181,7 +248,9 @@ export async function startSsrFProxy(
     return null;
   }
 
-  logInfo(`ssrf-proxy: routing process HTTP traffic through external proxy ${proxyUrl}`);
+  logInfo(
+    `ssrf-proxy: routing process HTTP traffic through external proxy ${redactProxyUrlForLog(proxyUrl)}`,
+  );
 
   const handle: SsrFProxyHandle = {
     proxyUrl,
